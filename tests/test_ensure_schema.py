@@ -48,6 +48,7 @@ async def test_ensure_schema_creates_tables_before_index_and_is_idempotent():
     await ensure_schema(engine)
     await ensure_schema(engine)
 
+    extension_calls = [idx for idx, action in enumerate(actions) if "CREATE EXTENSION IF NOT EXISTS vector" in action]
     create_all_indexes = [idx for idx, action in enumerate(actions) if action == "create_all"]
     memory_index_calls = [
         idx
@@ -55,8 +56,8 @@ async def test_ensure_schema_creates_tables_before_index_and_is_idempotent():
         if "CREATE INDEX IF NOT EXISTS idx_memories_user_memory_key" in action
     ]
 
-    assert create_all_indexes[0] == 0
+    assert len(extension_calls) == 2
     assert len(create_all_indexes) == 2
     assert len(memory_index_calls) == 2
-    assert create_all_indexes[0] < memory_index_calls[0]
-    assert create_all_indexes[1] < memory_index_calls[1]
+    assert extension_calls[0] < create_all_indexes[0] < memory_index_calls[0]
+    assert extension_calls[1] < create_all_indexes[1] < memory_index_calls[1]

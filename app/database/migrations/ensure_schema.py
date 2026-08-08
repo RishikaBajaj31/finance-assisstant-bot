@@ -7,12 +7,13 @@ from app.database.connection import Base
 
 
 async def ensure_schema(engine: AsyncEngine) -> None:
-    """Create tables first, then apply idempotent compatibility updates."""
+    """Initialize pgvector, create tables, then apply compatibility updates."""
 
     # Import model modules so SQLAlchemy has every table registered before create_all().
     import app.models  # noqa: F401
 
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE IF EXISTS memories ADD COLUMN IF NOT EXISTS memory_key VARCHAR(120)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_memories_user_memory_key ON memories (user_id, memory_key)"))
