@@ -23,6 +23,7 @@ TABLES = [
     "research_history",
     "alerts",
     "watchlists",
+    "telegram_updates",
     "memories",
     "conversations",
     "user_preferences",

@@ -12,6 +12,7 @@ from app.agents.graph import run_agent
 from app.agents.state import AgentState
 from app.core.logging import logger
 from app.core.exceptions import DocumentParseException
+from app.database.repositories.telegram_update_repo import TelegramUpdateRepository
 from app.services.document_service import DocumentService
 from app.services.memory_service import MemoryService
 from app.services.user_service import UserService
@@ -128,6 +129,13 @@ async def process_update(payload: Optional[Dict[str, Any]], session) -> Dict[str
     telegram_id = message.from_user.id if message.from_user else chat.id
     username = message.from_user.username if message.from_user else None
     full_name = message.from_user.full_name if message.from_user else None
+    update_id = getattr(update, "update_id", None)
+
+    if update_id is not None:
+        update_repo = TelegramUpdateRepository(session)
+        if not await update_repo.claim_update(update_id):
+            logger.info("Skipping duplicate Telegram update %s for %s", update_id, telegram_id)
+            return {"ok": True, "skipped": True, "reason": "duplicate telegram update", "telegram_sent": False}
 
     user_service = UserService(session)
     user = await user_service.get_or_create_user(telegram_id, username=username, full_name=full_name)

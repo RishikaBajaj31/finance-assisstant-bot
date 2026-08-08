@@ -6,6 +6,7 @@ from app.models.memory import Memory
 from app.models.watchlist import Watchlist, Alert
 from app.models.document import Document, DocumentChunk
 from app.models.research_history import ResearchHistory
+from app.models.telegram_update import TelegramUpdate
 
 __all__ = [
     "User",
@@ -17,4 +18,5 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "ResearchHistory",
+    "TelegramUpdate",
 ]

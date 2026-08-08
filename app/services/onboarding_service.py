@@ -5,19 +5,18 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from app.core.logging import logger
-from app.integrations.gemini import gemini_client
-from app.prompts.onboarding import (
-    ONBOARDING_EXTRACTION_SYSTEM_PROMPT,
-    ONBOARDING_FOLLOWUP_SYSTEM_PROMPT,
-)
-from app.services.company_resolution import company_resolver
 from app.database.repositories.user_repo import UserRepository
 from app.database.repositories.watchlist_repo import WatchlistRepository
+from app.integrations.gemini import gemini_client
+from app.services.company_resolution import company_resolver
+from app.prompts.onboarding import ONBOARDING_EXTRACTION_SYSTEM_PROMPT
+
+
+DEFAULT_BRIEFING_TIME = "08:00"
+DEFAULT_TIMEZONE = "UTC"
 
 
 @dataclass
@@ -49,25 +48,38 @@ def _normalize_time(value: str) -> Optional[str]:
     return None
 
 
+def _contains_any(text: str, phrases: List[str]) -> bool:
+    normalized = re.sub(r"[-_]+", " ", text.lower())
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _heuristic_role(text: str) -> Optional[str]:
+    normalized = re.sub(r"[-_]+", " ", text.lower())
+    if _contains_any(text, ["fresher", "fresh graduate", "new graduate", "recent graduate", "recent grad", "new grad", "entry level", "beginner", "graduate"]):
+        return "fresher"
+    if _contains_any(text, ["student", "undergraduate"]):
+        return "student"
+    for candidate in ("financial analyst", "analyst", "investor", "founder", "finance professional", "business"):
+        if candidate in normalized:
+            return candidate
+    return None
+
+
 def _heuristic_extract(text: str) -> OnboardingExtraction:
     lowered = text.lower()
-    role = None
-    for candidate in ("financial analyst", "analyst", "investor", "founder", "student", "finance professional", "business"):
-        if candidate in lowered:
-            role = candidate
-            break
+    role = _heuristic_role(text)
 
     companies: List[str] = []
     for name in ("nvidia", "amd", "apple", "microsoft", "tesla", "alphabet", "google", "amazon", "tsmc"):
         if name in lowered:
             companies.append(name)
 
-    sectors = []
+    sectors: List[str] = []
     for sector in ("ai", "artificial intelligence", "semiconductors", "technology", "healthcare", "fintech", "energy", "cloud", "software"):
         if sector in lowered:
             sectors.append(sector.title() if sector != "ai" else "AI")
 
-    interests = []
+    interests: List[str] = []
     for interest in ("company news", "earnings", "filings", "macro events", "market moves", "valuation", "financial performance"):
         if interest in lowered:
             interests.append(interest.title())
@@ -82,7 +94,16 @@ def _heuristic_extract(text: str) -> OnboardingExtraction:
         timezone = "America/New_York"
 
     skip = any(phrase in lowered for phrase in ("just get started", "skip", "no thanks", "not now"))
-    return OnboardingExtraction(role=role, companies=companies, sectors=sectors, interests=interests, briefing_time=briefing_time, timezone=timezone, skip=skip, complete=skip)
+    return OnboardingExtraction(
+        role=role,
+        companies=companies,
+        sectors=sectors,
+        interests=interests,
+        briefing_time=briefing_time,
+        timezone=timezone,
+        skip=skip,
+        complete=skip,
+    )
 
 
 class OnboardingService:
@@ -101,8 +122,9 @@ class OnboardingService:
             system_instruction=ONBOARDING_EXTRACTION_SYSTEM_PROMPT,
             default={},
         )
+        heuristic = _heuristic_extract(text)
         if not parsed:
-            return _heuristic_extract(text)
+            return heuristic
 
         extraction = OnboardingExtraction(
             role=(parsed.get("role") or None),
@@ -115,16 +137,37 @@ class OnboardingService:
             complete=bool(parsed.get("complete")),
         )
         if extraction.skip and not any([extraction.role, extraction.companies, extraction.sectors, extraction.interests, extraction.briefing_time, extraction.timezone]):
-            return _heuristic_extract(text)
+            return heuristic
+        if not extraction.role:
+            extraction.role = heuristic.role
+        if not extraction.companies:
+            extraction.companies = heuristic.companies
+        if not extraction.sectors:
+            extraction.sectors = heuristic.sectors
+        if not extraction.interests:
+            extraction.interests = heuristic.interests
+        if not extraction.briefing_time:
+            extraction.briefing_time = heuristic.briefing_time
+        if not extraction.timezone:
+            extraction.timezone = heuristic.timezone
+        extraction.skip = extraction.skip or heuristic.skip
         return extraction
+
+    def _has_explicit_briefing_time(self, user, extraction: OnboardingExtraction) -> bool:
+        briefing_time = getattr(user, "briefing_time", None)
+        return bool(extraction.briefing_time or (briefing_time and briefing_time != DEFAULT_BRIEFING_TIME))
+
+    def _has_explicit_timezone(self, user, extraction: OnboardingExtraction) -> bool:
+        timezone = getattr(user, "timezone", None)
+        return bool(extraction.timezone or (timezone and timezone != DEFAULT_TIMEZONE))
 
     def _missing_fields(self, user, extraction: OnboardingExtraction) -> List[str]:
         preferences = getattr(user, "preferences", None)
         known_role = bool(getattr(user, "role", None) or extraction.role)
         known_companies = bool((preferences and getattr(preferences, "interests", None)) or extraction.companies)
         known_sectors = bool((preferences and getattr(preferences, "sectors", None)) or extraction.sectors)
-        known_time = bool(getattr(user, "briefing_time", None) or extraction.briefing_time)
-        known_tz = bool(getattr(user, "timezone", None) or extraction.timezone)
+        known_time = self._has_explicit_briefing_time(user, extraction)
+        known_tz = self._has_explicit_timezone(user, extraction)
         missing: List[str] = []
         if not known_role:
             missing.append("role")
@@ -158,11 +201,11 @@ class OnboardingService:
 
         current_user = await self.user_repo.get_by_id(user.id)
         preferences = getattr(current_user, "preferences", None)
-        is_complete = bool(
-            (current_user and current_user.role)
-            and (current_user and current_user.briefing_time)
-            and (preferences and (preferences.sectors or preferences.interests or resolved_companies))
-        )
+        role_known = bool(current_user and current_user.role)
+        focus_known = bool(preferences and (preferences.sectors or preferences.interests or resolved_companies))
+        time_known = self._has_explicit_briefing_time(current_user, extraction)
+        tz_known = self._has_explicit_timezone(current_user, extraction)
+        is_complete = bool(role_known and focus_known and time_known and tz_known)
         if extraction.complete:
             is_complete = True
         await self.user_repo.update_user_profile(user.id, onboarding_complete=is_complete)
@@ -177,8 +220,8 @@ class OnboardingService:
         role_known = bool(getattr(user, "role", None) or extraction.role)
         companies_known = bool((preferences and preferences.interests) or extraction.companies)
         sectors_known = bool((preferences and preferences.sectors) or extraction.sectors)
-        time_known = bool(getattr(user, "briefing_time", None) or extraction.briefing_time)
-        tz_known = bool(getattr(user, "timezone", None) or extraction.timezone)
+        time_known = self._has_explicit_briefing_time(user, extraction)
+        tz_known = self._has_explicit_timezone(user, extraction)
 
         if not role_known:
             return "Got it. What best describes your role or background?"

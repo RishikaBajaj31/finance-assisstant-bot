@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Telegram Update Deduplication Table
+CREATE TABLE IF NOT EXISTS telegram_updates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    update_id BIGINT UNIQUE NOT NULL,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Long-Term Semantic Memory Table
 CREATE TABLE IF NOT EXISTS memories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
