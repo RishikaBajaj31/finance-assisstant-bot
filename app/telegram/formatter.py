@@ -1,4 +1,4 @@
-"""Telegram markdown formatting helpers."""
+"""Telegram formatting helpers."""
 
 from app.utils.formatting import safe_markdown
 

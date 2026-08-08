@@ -8,4 +8,4 @@ def bullet_list(items: Iterable[str]) -> str:
 
 
 def safe_markdown(text: str) -> str:
-    return text.replace("â€¢", "•").replace("ðŸ“Š", "📊").replace("ðŸŽ¯", "🎯").replace("ðŸ’¡", "💡").replace("âš¡", "⚡")
+    return text.replace("\r\n", "\n").replace("\r", "\n")

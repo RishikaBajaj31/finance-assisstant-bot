@@ -11,6 +11,7 @@ from app.services.company_resolution import CompanyResolution
 from app.services.onboarding_service import OnboardingService
 from app.services.user_service import UserService
 from app.telegram.bot import telegram_bot
+from app.telegram.formatter import format_message
 from app.telegram.handlers import process_update
 
 
@@ -232,5 +233,57 @@ def test_same_text_with_different_update_ids_are_both_processed(monkeypatch):
             assert first["telegram_sent"] is True
             assert second["telegram_sent"] is True
             assert len(sent_messages) == 2
+
+    run(scenario())
+
+
+def test_telegram_send_message_uses_plain_text_without_markdown(monkeypatch):
+    async def scenario():
+        await reset_db()
+
+        captured = {}
+
+        class FakeBot:
+            async def send_message(self, **kwargs):
+                captured.update(kwargs)
+                return True
+
+        original_bot = telegram_bot._bot
+        telegram_bot._bot = FakeBot()
+        try:
+            text = (
+                "Long AI-generated update: _underscores_, *asterisks*, [brackets](https://example.com), "
+                "(parentheses), - hyphens -, $123.45, https://example.com/path?q=1, and plain text.\n"
+                + "More details: " + ("AI output " * 40)
+            )
+            sent = await telegram_bot.send_message(7006, text)
+            assert sent is True
+            assert captured["chat_id"] == 7006
+            assert captured["text"] == format_message(text)
+            assert "parse_mode" not in captured
+        finally:
+            telegram_bot._bot = original_bot
+
+    run(scenario())
+
+
+def test_gemini_quota_error_returns_fallback_response(monkeypatch):
+    async def scenario():
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                raise Exception("429 RESOURCE_EXHAUSTED: Quota exceeded")
+
+        class FakeClient:
+            def __init__(self):
+                self.models = FakeModels()
+
+        original_client = gemini_client.client
+        gemini_client.client = FakeClient()
+        try:
+            response = await gemini_client.generate_response("Tell me about Nvidia")
+            assert response
+            assert "temporarily unable" in response.lower()
+        finally:
+            gemini_client.client = original_client
 
     run(scenario())

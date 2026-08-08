@@ -21,7 +21,7 @@ class TelegramBot:
             logger.info("Telegram bot not configured; skipping outbound message.")
             return False
         try:
-            await self._bot.send_message(chat_id=chat_id, text=format_message(text), parse_mode="Markdown")
+            await self._bot.send_message(chat_id=chat_id, text=format_message(text))
             return True
         except BadRequest as exc:
             logger.warning("Telegram send_message failed for chat_id=%s: %s", chat_id, exc)

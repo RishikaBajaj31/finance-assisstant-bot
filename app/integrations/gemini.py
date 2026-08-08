@@ -2,8 +2,10 @@
 
 import json
 from typing import Any, Dict, List, Optional
+
 from google import genai
 from google.genai import types
+
 from app.config import settings
 from app.core.logging import logger
 
@@ -20,6 +22,10 @@ class GeminiClient:
                 self.client = genai.Client(api_key=self.api_key)
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini Client: {e}")
+
+    def _is_quota_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return "resource_exhausted" in message or "quota" in message or "429" in message
 
     async def generate_response(self, prompt: str, system_instruction: Optional[str] = None) -> str:
         """Generate text response using Gemini 2.5 Flash model."""
@@ -39,6 +45,9 @@ class GeminiClient:
             )
             return response.text if response.text else "No response generated."
         except Exception as e:
+            if self._is_quota_error(e):
+                logger.warning("Gemini quota exhausted for model %s: %s", self.model_name, e)
+                return "I'm temporarily unable to reach Gemini right now because the model quota was exceeded. Please try again in a moment."
             logger.error(f"Error calling Gemini API: {e}")
             return self._mock_response(prompt)
 
@@ -67,7 +76,10 @@ class GeminiClient:
             )
             return self._parse_json_object(response.text or "", default=default or {})
         except Exception as e:
-            logger.error(f"Error calling Gemini JSON API: {e}")
+            if self._is_quota_error(e):
+                logger.warning("Gemini quota exhausted for JSON generation on model %s: %s", self.model_name, e)
+            else:
+                logger.error(f"Error calling Gemini JSON API: {e}")
             return default or {}
 
     async def generate_embedding(self, text: str) -> List[float]:
