@@ -1,0 +1,371 @@
+# AI Financial Assistant — Implementation Plan
+
+## Overview
+
+A production-grade, AI-powered Financial Assistant living inside Telegram. It behaves like a senior financial analyst — not a chatbot. Everything happens through natural conversation: no slash commands, no menus, no forms.
+
+The core value proposition is **intelligence over volume** — fewer but smarter responses, personalized to the user, with memory across sessions.
+
+---
+
+## Strategic MVP Decisions
+
+Rather than implementing all 8 features partially, we focus on **5 polished pillars**:
+
+| Pillar | Why |
+|---|---|
+| **Conversational Onboarding** | First impression; shows memory works |
+| **Persistent Memory** | Foundation of personalization |
+| **Company Research** | Highest judge-visible AI output quality |
+| **News Intelligence** | Demonstrates LLM reasoning vs. raw data dump |
+| **Daily Briefing + Smart Alerts** | Proactive — impresses judges on product thinking |
+
+Document Intelligence (PDF) is included as a bonus tier — solid but not over-engineered.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Telegram Bot Layer                          │
+│            (python-telegram-bot, webhook mode)                  │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │ HTTP
+┌─────────────────────▼───────────────────────────────────────────┐
+│                   FastAPI Application                           │
+│   /webhook  /api/v1/users  /api/v1/alerts  /api/v1/briefings   │
+└────────┬──────────────────────────┬──────────────────────────────┘
+         │                          │
+┌────────▼────────┐      ┌──────────▼──────────┐
+│  LangGraph      │      │  APScheduler        │
+│  Agent          │      │  (Daily Briefings,  │
+│  Orchestrator   │      │   Price Alerts)     │
+└────────┬────────┘      └──────────┬──────────┘
+         │                          │
+┌────────▼──────────────────────────▼──────────┐
+│              Service Layer                    │
+│  UserService  ResearchService  NewsService    │
+│  MemoryService  AlertService  DocumentService │
+└────────┬──────────────────────────────────────┘
+         │
+┌────────▼──────────────────────────────────────┐
+│              Data Layer                       │
+│  PostgreSQL + pgvector (SQLAlchemy async)     │
+│  Models: User, Memory, Conversation,          │
+│          Watchlist, Alert, Document           │
+└───────────────────────────────────────────────┘
+```
+
+---
+
+## LangGraph Agent Workflow
+
+```
+User Message ──► Router Node
+                    │
+        ┌───────────┼───────────┬──────────────┐
+        │           │           │              │
+   Onboarding  Research     News Intel    Document
+     Node        Node          Node        Node
+        │           │           │              │
+        └───────────┴───────────┴──────────────┘
+                    │
+              Memory Node (reads + writes)
+                    │
+              Response Node (formats output)
+                    │
+            ◄── Telegram Message
+```
+
+The **Router** classifies intent using the LLM — no rigid keyword matching. The agent uses tools and memory at each node.
+
+---
+
+## Folder Structure
+
+```
+financial-assistant/
+├── app/
+│   ├── main.py                    # FastAPI entrypoint
+│   ├── config.py                  # Settings via pydantic-settings
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── router.py              # API route aggregator
+│   │   ├── webhook.py             # Telegram webhook endpoint
+│   │   ├── users.py               # User CRUD endpoints
+│   │   └── alerts.py              # Alert management endpoints
+│   │
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── graph.py               # LangGraph graph definition
+│   │   ├── nodes/
+│   │   │   ├── router_node.py     # Intent classification
+│   │   │   ├── onboarding_node.py # Conversational onboarding
+│   │   │   ├── research_node.py   # Company research
+│   │   │   ├── news_node.py       # News intelligence
+│   │   │   ├── document_node.py   # PDF analysis
+│   │   │   └── response_node.py   # Output formatting
+│   │   └── state.py               # LangGraph AgentState
+│   │
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── company_research.py    # Company data + financials
+│   │   ├── financial_news.py      # News fetching + scoring
+│   │   ├── market_summary.py      # Market overview
+│   │   ├── document_analysis.py   # PDF parsing + RAG
+│   │   ├── memory_tool.py         # Read/write user memory
+│   │   ├── watchlist_tool.py      # Manage watchlists
+│   │   └── alert_tool.py          # Create/manage alerts
+│   │
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── conversation.py        # Short-term conv history
+│   │   ├── semantic.py            # pgvector semantic search
+│   │   └── user_context.py        # User profile aggregator
+│   │
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── user_service.py        # User CRUD logic
+│   │   ├── research_service.py    # Company research orchestration
+│   │   ├── news_service.py        # News processing
+│   │   ├── briefing_service.py    # Daily briefing generator
+│   │   ├── alert_service.py       # Alert evaluation
+│   │   └── document_service.py    # PDF ingestion + chunking
+│   │
+│   ├── database/
+│   │   ├── __init__.py
+│   │   ├── connection.py          # Async engine + session factory
+│   │   ├── migrations/
+│   │   │   └── init.sql           # Bootstrap schema
+│   │   └── repositories/
+│   │       ├── user_repo.py
+│   │       ├── conversation_repo.py
+│   │       ├── memory_repo.py
+│   │       ├── watchlist_repo.py
+│   │       ├── alert_repo.py
+│   │       └── document_repo.py
+│   │
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   ├── conversation.py
+│   │   ├── memory.py
+│   │   ├── watchlist.py
+│   │   ├── alert.py
+│   │   ├── document.py
+│   │   └── research_history.py
+│   │
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   ├── conversation.py
+│   │   ├── alert.py
+│   │   └── research.py
+│   │
+│   ├── prompts/
+│   │   ├── __init__.py
+│   │   ├── system.py              # Base analyst persona
+│   │   ├── onboarding.py
+│   │   ├── research.py
+│   │   ├── news.py
+│   │   ├── briefing.py
+│   │   └── router.py
+│   │
+│   ├── integrations/
+│   │   ├── __init__.py
+│   │   ├── gemini.py              # Gemini LLM + embeddings client
+│   │   ├── yfinance_client.py     # Market data
+│   │   └── news_client.py        # NewsAPI / RSS feeds
+│   │
+│   ├── telegram/
+│   │   ├── __init__.py
+│   │   ├── bot.py                 # Bot application setup
+│   │   ├── handlers.py            # Message/document handlers
+│   │   └── formatter.py           # Markdown output formatter
+│   │
+│   ├── scheduler/
+│   │   ├── __init__.py
+│   │   ├── setup.py               # APScheduler factory
+│   │   ├── briefing_job.py        # Daily briefing cron
+│   │   └── alert_job.py           # Price alert polling
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── logging.py             # Structured logging
+│   │   ├── exceptions.py          # Custom exceptions
+│   │   └── dependencies.py        # FastAPI DI providers
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── text.py                # Text chunking helpers
+│       └── formatting.py          # Response formatters
+│
+├── tests/
+│   ├── conftest.py
+│   ├── test_agents/
+│   ├── test_services/
+│   └── test_tools/
+│
+├── .env.example
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+Total estimated files: ~55–65. All under 250 lines.
+
+---
+
+## Database Schema
+
+```sql
+-- Users
+users (id, telegram_id, username, full_name, role, onboarding_complete, briefing_time, timezone, created_at)
+
+-- User Preferences
+user_preferences (id, user_id, sectors[], risk_tolerance, investment_style, created_at, updated_at)
+
+-- Conversation History (short-term)
+conversations (id, user_id, role, content, created_at)
+
+-- Semantic Memory (long-term, embedded)
+memories (id, user_id, content, embedding vector(768), memory_type, importance, created_at)
+
+-- Watchlists
+watchlists (id, user_id, ticker, company_name, added_at, notes)
+
+-- Alerts
+alerts (id, user_id, ticker, condition, threshold, triggered, last_checked, created_at)
+
+-- Documents
+documents (id, user_id, filename, file_type, status, created_at)
+
+-- Document Chunks (for RAG)
+document_chunks (id, document_id, content, embedding vector(768), chunk_index)
+
+-- Research History
+research_history (id, user_id, query, result_summary, tickers[], created_at)
+
+-- Scheduled Tasks
+scheduled_tasks (id, user_id, task_type, cron_expr, last_run, is_active)
+```
+
+---
+
+## Key Technical Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Agent framework | LangGraph | Stateful, inspectable agent graph |
+| LLM | Gemini 2.5 Flash | Fast, cost-effective, long context |
+| Embeddings | Gemini text-embedding-004 | Consistent with LLM provider |
+| DB async | asyncpg + SQLAlchemy async | Non-blocking I/O throughout |
+| Telegram mode | Webhook | Production-grade, not polling |
+| News source | NewsAPI + yfinance | Free tier sufficient for MVP |
+| Memory strategy | Hybrid: last-N turns + semantic search | Best recall without token bloat |
+| PDF parsing | pdfplumber + chunking | Reliable, no external service |
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> **News API Key**: Do you have a NewsAPI.org key? If not, we'll fall back to yfinance news + RSS feeds (no key needed but fewer sources).
+
+> [!IMPORTANT]
+> **Telegram Bot Token**: Should I include a dummy `.env.example` and assume you'll fill it in, or do you have a bot token ready?
+
+> [!IMPORTANT]
+> **Deployment target**: Local Docker Compose, or a cloud provider (Render/Railway/GCP)? This affects webhook URL configuration.
+
+> [!IMPORTANT]
+> **Gemini API Key**: Assuming you have one. The `GEMINI_API_KEY` will be set in `.env`.
+
+---
+
+## Implementation Phases
+
+### Phase 1 — Foundation
+- Project scaffolding (folders, config, logging)
+- Database models + async connection
+- FastAPI app + webhook endpoint
+- Telegram bot setup
+
+### Phase 2 — Agent Core
+- LangGraph state + graph definition
+- Router node (intent classification)
+- Memory system (conversation + semantic)
+
+### Phase 3 — Onboarding + Memory
+- Conversational onboarding node
+- User preference storage
+- Memory read/write tools
+
+### Phase 4 — Research + News
+- Company research tool (yfinance + Gemini)
+- News intelligence tool
+- Research/news nodes
+
+### Phase 5 — Briefing + Alerts
+- Daily briefing service + scheduler
+- Smart alert system (price moves, SEC filings)
+- APScheduler setup
+
+### Phase 6 — Document Intelligence
+- PDF upload handling
+- Chunking + embedding pipeline
+- RAG query tool
+
+### Phase 7 — Polish + Delivery
+- Prompt engineering refinement
+- Error handling hardening
+- README, Dockerfile, docker-compose
+- Architecture + sequence diagrams
+
+---
+
+## Verification Plan
+
+### Automated
+```bash
+pytest tests/ -v --cov=app
+```
+
+### Manual
+1. Send message to bot → onboarding kicks off naturally
+2. Ask "What do you think about NVDA?" → structured research response
+3. Ask "Any Tesla news?" → 3 bullets: what/why/impact
+4. Upload PDF → ask "What are the risks?"
+5. Morning briefing fires at configured time
+6. Stock moves >5% → alert received in Telegram
+
+---
+
+## Mermaid Architecture Diagram (to be embedded in README)
+
+```mermaid
+graph TB
+    TG[Telegram User] -->|Message / PDF| HOOK[FastAPI Webhook]
+    HOOK --> AGENT[LangGraph Agent]
+    AGENT --> ROUTER{Intent Router}
+    ROUTER -->|Onboarding| ON[Onboarding Node]
+    ROUTER -->|Research| RES[Research Node]
+    ROUTER -->|News| NEWS[News Node]
+    ROUTER -->|Document| DOC[Document Node]
+    ROUTER -->|General| GEN[General Node]
+    ON & RES & NEWS & DOC & GEN --> MEM[Memory Node]
+    MEM --> RESP[Response Formatter]
+    RESP --> TG
+
+    SCHED[APScheduler] -->|Daily 8am| BRIEF[Briefing Service]
+    SCHED -->|Every 15min| ALERT[Alert Checker]
+    BRIEF & ALERT --> TG
+
+    AGENT <--> DB[(PostgreSQL + pgvector)]
+    AGENT <--> GEMINI[Gemini 2.5 Flash]
+    AGENT <--> YFINANCE[yfinance API]
+    AGENT <--> NEWSAPI[News Sources]
+```
