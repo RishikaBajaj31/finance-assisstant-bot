@@ -3,9 +3,17 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.database.connection import Base
+
 
 async def ensure_schema(engine: AsyncEngine) -> None:
+    """Create tables first, then apply idempotent compatibility updates."""
+
+    # Import model modules so SQLAlchemy has every table registered before create_all().
+    import app.models  # noqa: F401
+
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE IF EXISTS memories ADD COLUMN IF NOT EXISTS memory_key VARCHAR(120)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_memories_user_memory_key ON memories (user_id, memory_key)"))
         await conn.execute(text("ALTER TABLE IF EXISTS documents ADD COLUMN IF NOT EXISTS telegram_file_id VARCHAR(255)"))
